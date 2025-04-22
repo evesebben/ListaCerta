@@ -1,89 +1,74 @@
-import time
-from bs4 import BeautifulSoup
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-import pandas as pd
-from time import sleep
+import time
 
-# Inicializar o driver do Selenium (certifique-se de ter o ChromeDriver instalado)
+app = FastAPI()
 
-Options = Options()
-Options.add_argument('window-size=1400,1800')
-driver = webdriver.Chrome(options=Options)
-# Abrir a página
-url = "https://www.confianca.com.br/"
-driver.get(url)
-time.sleep(1.5)
-bauru = driver.find_element(By.XPATH, "//div[@class='box__button']")
-bauru.click()
-time.sleep(1)
-menu = driver.find_element(By.XPATH, "//section/div/div/div/div/button")
-menu.click()
-sleep(1)
-lista_categoria = []
-# colocar a tag no final /a que contem o href
-categorias = driver.find_elements(
-    By.XPATH, "//div[@class='side-nav__menu-item']/a")
+# CORS para dev/local
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # ajuste conforme o ambiente
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-for categoria in categorias:
-    lista_categoria.append(
-        categoria.get_attribute('href'))
-# print(lista_categoria)
-lista_prod = []
-lista_preco = []
-lista_cat = []
-lista_imagem = []
-# Percorrer a lista a partir do segundo elemento
-for i in range(1, len(lista_categoria)):
-    driver.get(lista_categoria[i])
-    time.sleep(0.5)
+@app.get("/scrape")
+def scrape():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("window-size=1400,1800")
 
-    # Tempo total para rolar a página (1 minuto = 60 segundos)
-    tempo_total = 60
-    # Intervalo de rolagem (ajuste conforme necessário)
-    intervalo = 2  # Rolar a cada x segundos
-    # Calcula quantas vezes precisamos rolar
-    num_rolagens = tempo_total // intervalo
+    driver = webdriver.Chrome(options=options)
 
-    # Rolar a página continuamente
+    try:
+        driver.get("https://www.confianca.com.br/")
+        time.sleep(1.5)
+        driver.find_element(By.XPATH, "//div[@class='box__button']").click()
+        time.sleep(1)
+        driver.find_element(By.XPATH, "//section/div/div/div/div/button").click()
+        time.sleep(1)
 
-    for _ in range(num_rolagens):
-        # Rolar até o final da página
-        driver.execute_script(
-            "window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(intervalo)
-    # Encontrar todos os produtos
-    products = driver.find_elements(By.CLASS_NAME, "product-shelf__name")
-    precos = driver.find_elements(
-        By.CLASS_NAME, "product-shelf__price-current")
-    # Encontrar a categoria
-    cat = driver.find_element(By.XPATH, "//div[2]/div/h2")
-    imagens = driver.find_elements(
-        By.XPATH, "//section[2]/div/a/div/div/button/img")
+        categorias = driver.find_elements(By.XPATH, "//div[@class='side-nav__menu-item']/a")
+        lista_categoria = [c.get_attribute("href") for c in categorias]
 
-    # Extrair informações (nome e preço) de cada produto
-    for product in products:
-        # product_name = product.text.strip()
-        lista_prod.append(
-            product.text.strip()
-        )
-        lista_cat.append(cat.text)
-    for preco in precos:
-        # product_price = preco.text.strip()
-        lista_preco.append(
-            preco.text.strip()
-        )
-    for imagem in imagens:
-        lista_imagem.append(imagem.get_attribute("src"))
-df = pd.DataFrame({
-    "Produto": lista_prod,
-    "Preço": lista_preco,
-    "Categoria": lista_cat,
-    "Imagem": lista_imagem
-})
+        lista_prod = []
+        lista_preco = []
+        lista_cat = []
+        lista_imagem = []
 
-nome_arquivo = "Dados_mercado.xlsx"
-df.to_excel(nome_arquivo, index=False)
-print(f"Os dados foram salvos no arquivo {nome_arquivo}")
+        for i in range(1, len(lista_categoria)):
+            driver.get(lista_categoria[i])
+            time.sleep(0.5)
+
+            for _ in range(30):
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(2)
+
+            products = driver.find_elements(By.CLASS_NAME, "product-shelf__name")
+            precos = driver.find_elements(By.CLASS_NAME, "product-shelf__price-current")
+            cat = driver.find_element(By.XPATH, "//div[2]/div/h2").text
+            imagens = driver.find_elements(By.XPATH, "//section[2]/div/a/div/div/button/img")
+
+            for idx, product in enumerate(products):
+                lista_prod.append(product.text.strip())
+                lista_cat.append(cat)
+                lista_preco.append(precos[idx].text.strip() if idx < len(precos) else None)
+                lista_imagem.append(imagens[idx].get_attribute("src") if idx < len(imagens) else None)
+
+        results = []
+        for i in range(len(lista_prod)):
+            results.append({
+                "produto": lista_prod[i],
+                "preco": lista_preco[i],
+                "categoria": lista_cat[i],
+                "imagem": lista_imagem[i]
+            })
+
+        return {"results": results}
+
+    finally:
+        driver.quit()
